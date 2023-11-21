@@ -1,5 +1,5 @@
 name: sqids
-description: "A new Flutter package project."
+description: Official dart port of Sqids. Generate short YouTube-looking IDs from numbers.
 version: 0.0.1
 homepage: https://github.com/sqids/sqids-dart
 

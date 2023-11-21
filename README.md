@@ -1,6 +1,6 @@
 # [Sqids Dart](https://sqids.org/dart)
 
-[![Pub](https://img.shields.io/pub/v/sqids.svg)](https://pub.dartlang.org/packages/gap)
+[![Pub](https://img.shields.io/pub/v/sqids.svg)](https://pub.dartlang.org/packages/sqids)
 
 
 Features:
