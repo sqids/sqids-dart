@@ -2,7 +2,7 @@
 
 import 'dart:math';
 
-import 'package:sqids/src/blocked.dart';
+import 'package:sqids/src/defaults.dart' as defaults;
 
 class Sqids {
   // Properties
@@ -12,52 +12,14 @@ class Sqids {
 
   // Constructor
   Sqids({
-    String alphabet =
-        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+    String alphabet = defaults.alphabet,
     int minLength = 0,
     Set<String>? blocklist,
   }) {
-    this.alphabet = alphabet;
-    this.minLength = minLength;
-    this.blocklist = blocklist ?? blocked;
-
-    // Validate alphabet
-    if (this.alphabet.isEmpty) {
-      throw Exception('Alphabet cannot contain multibyte characters');
-    }
-    const minAlphabetLength = 3;
-    if (this.alphabet.length < minAlphabetLength) {
-      throw Exception('Alphabet length must be at least $minAlphabetLength');
-    }
-    if (Set.of(this.alphabet.split('')).length != this.alphabet.length) {
-      throw Exception('Alphabet must contain unique characters');
-    }
-
-    // Validate minLength
-    const minLengthLimit = 255;
-    if (this.minLength < 0 || this.minLength > minLengthLimit) {
-      throw Exception('Minimum length has to be between 0 and $minLengthLimit');
-    }
-
-    // Filter blocklist based on the provided criteria
-    final filteredBlocklist = <String>{};
-    final alphabetChars = this.alphabet.toLowerCase().split('');
-    for (final word in this.blocklist) {
-      if (word.length >= 3) {
-        final wordLowercased = word.toLowerCase();
-        final wordChars = wordLowercased.split('');
-        final intersection =
-            wordChars.where((c) => alphabetChars.contains(c)).toList();
-        if (intersection.length == wordChars.length) {
-          filteredBlocklist.add(wordLowercased);
-        }
-      }
-    }
-
-    // Shuffle the alphabet
+    this.alphabet = _validateAlphabet(alphabet);
+    this.minLength = _validateMinLength(minLength);
+    this.blocklist = _filterBlocklist(blocklist ?? defaults.blocked, alphabet);
     this.alphabet = shuffle(this.alphabet);
-    this.minLength = minLength;
-    this.blocklist = filteredBlocklist;
   }
 
   // Encode a list of numbers into a string
@@ -239,5 +201,37 @@ class Sqids {
   // Get the maximum value supported for encoding
   int maxValue() {
     return (pow(2, 53) - 1).toInt();
+  }
+
+  static String _validateAlphabet(String alphabet) {
+    const minAlphabetLength = 3;
+
+    if (alphabet.length < minAlphabetLength) {
+      throw Exception('Alphabet length must be at least $minAlphabetLength');
+    }
+
+    if (Set.of(alphabet.split('')).length != alphabet.length) {
+      throw Exception('Alphabet must contain unique characters');
+    }
+    return alphabet;
+  }
+
+  static int _validateMinLength(int minLength) {
+    const minLengthLimit = 255;
+    if (minLength < 0 || minLength > minLengthLimit) {
+      throw Exception('Minimum length has to be between 0 and $minLengthLimit');
+    }
+    return minLength;
+  }
+
+  static Set<String> _filterBlocklist(Set<String> blocklist, String alphabet) {
+    final alphabetChars = Set.from(alphabet.toLowerCase().split(''));
+
+    return blocklist
+        .where((word) => word.length >= 3)
+        .map((word) => word.toLowerCase())
+        .where((word) =>
+            Set.from(word.split('')).difference(alphabetChars).isEmpty)
+        .toSet();
   }
 }

@@ -1,3 +1,6 @@
+const alphabet =
+    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
 const blocked = {
   '0rgasm',
   '1d10t',
