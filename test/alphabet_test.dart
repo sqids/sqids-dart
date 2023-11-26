@@ -1,7 +1,5 @@
-import 'package:flutter_test/flutter_test.dart';
 import 'package:sqids/sqids.dart';
-
-
+import 'package:test/test.dart';
 
 void main() {
   group('alphabet', () {
