@@ -1,4 +1,4 @@
-const blocked = [
+const blocked = {
   '0rgasm',
   '1d10t',
   '1d1ot',
@@ -559,4 +559,4 @@ const blocked = [
   'zocc0la',
   'zocco1a',
   'zoccola',
-];
+};

@@ -19,7 +19,7 @@ class Sqids {
   }) {
     this.alphabet = alphabet;
     this.minLength = minLength;
-    this.blocklist = blocklist ?? blocked.toSet();
+    this.blocklist = blocklist ?? blocked;
 
     // Validate alphabet
     if (this.alphabet.isEmpty) {
