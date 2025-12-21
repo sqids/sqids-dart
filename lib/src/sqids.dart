@@ -9,6 +9,7 @@ class Sqids {
   late String alphabet;
   late int minLength;
   late Set<String> blocklist;
+  static final _numberRegex = RegExp(r'\d');
 
   // Constructor
   Sqids({
@@ -29,8 +30,9 @@ class Sqids {
     }
 
     // Validate that all numbers are in the valid range
-    final inRangeNumbers =
-        numbers.where((n) => n >= 0 && n <= maxValue()).toList();
+    final inRangeNumbers = numbers
+        .where((n) => n >= 0 && n <= maxValue())
+        .toList();
     if (inRangeNumbers.length != numbers.length) {
       throw Exception('Encoding supports numbers between 0 and ${maxValue()}');
     }
@@ -91,43 +93,62 @@ class Sqids {
     }
 
     int offset = 0;
+    int len = numbers.length;
 
     // Calculate the offset based on the numbers
-    for (int i = 0; i < numbers.length; i++) {
+    for (int i = 0; i < len; i++) {
       int v = numbers[i];
-      offset += this.alphabet[v % this.alphabet.length].codeUnitAt(0) + i;
+      offset += this.alphabet.codeUnitAt(v % this.alphabet.length) + i;
     }
 
-    offset = (offset + numbers.length) % this.alphabet.length;
+    offset = (offset + len) % this.alphabet.length;
 
     offset = (offset + increment) % this.alphabet.length;
-    String alphabet =
+
+    // Create internal alphabet as a list to avoid repeated string splits
+    // Using string manipulation for the initial rotation as it's just one time
+    String alphabetStr =
         this.alphabet.substring(offset) + this.alphabet.substring(0, offset);
-    String prefix = alphabet[0];
-    alphabet = alphabet.split('').reversed.join('');
-    List<String> ret = [prefix];
+    String prefix = alphabetStr[0];
+    List<String> alphabet = alphabetStr.split('').reversed.toList();
+
+    StringBuffer result = StringBuffer();
+    result.write(prefix);
 
     // Generate the encoded ID
-    for (int i = 0; i < numbers.length; i++) {
+    for (int i = 0; i < len; i++) {
       int num = numbers[i];
 
-      ret.add(toId(num, alphabet.substring(1)));
-      if (i < numbers.length - 1) {
-        ret.add(alphabet.substring(0, 1));
-        alphabet = shuffle(alphabet);
+      // Using a helper that works with List<String> would be faster but toId expects String
+      // For now, let's keep toId adaptable or pass the current state
+      // Actually passing the list sublist as string is expensive: alphabet.substring(1)
+      // Let's optimize shuffle to work on the list in place if possible,
+      // but shuffle returns a new 'alphabet' state.
+
+      // We need to match the spec exactly on how alphabet evolves.
+      // alphabet = shuffle(alphabet) returns a string in original code.
+      // Let's rewrite optimal shuffle and toId.
+
+      result.write(toId(num, alphabet.sublist(1).join('')));
+
+      if (i < len - 1) {
+        result.write(alphabet.sublist(0, 1).join(''));
+        _shuffleInPlace(alphabet);
       }
     }
 
-    String id = ret.join('');
+    String id = result.toString();
 
     // Ensure the ID meets the minimum length
     if (minLength > id.length) {
-      id += alphabet.substring(0, 1);
+      id += alphabet[0];
 
-      for (int i = minLength - id.length; i > 0; i -= alphabet.length) {
-        alphabet = shuffle(alphabet);
-        id +=
-            alphabet.substring(0, (i < alphabet.length) ? i : alphabet.length);
+      while (minLength - id.length > 0) {
+        _shuffleInPlace(alphabet);
+        int diff = minLength - id.length;
+        if (diff > 0) {
+          id += alphabet.sublist(0, min(diff, alphabet.length)).join('');
+        }
       }
     }
 
@@ -141,32 +162,37 @@ class Sqids {
 
   // Shuffle the characters of the alphabet
   String shuffle(String alphabet) {
+    if (alphabet.isEmpty) return alphabet;
     final chars = alphabet.split('');
+    _shuffleInPlace(chars);
+    return chars.join('');
+  }
 
+  void _shuffleInPlace(List<String> chars) {
     for (int i = 0, j = chars.length - 1; j > 0; i++, j--) {
-      final r = (i * j + chars[i].codeUnitAt(0) + chars[j].codeUnitAt(0)) %
+      final r =
+          (i * j + chars[i].codeUnitAt(0) + chars[j].codeUnitAt(0)) %
           chars.length;
       final temp = chars[i];
       chars[i] = chars[r];
       chars[r] = temp;
     }
-
-    return chars.join('');
   }
 
   // Convert a number to a string ID using a custom alphabet
   String toId(int num, String alphabet) {
-    final id = <String>[];
+    final id = StringBuffer();
     final chars = alphabet.split('');
+    final int charsLength = chars.length;
 
     int result = num;
 
     do {
-      id.insert(0, chars[result % chars.length]);
-      result = (result / chars.length).floor();
+      id.write(chars[result % charsLength]);
+      result = (result / charsLength).floor();
     } while (result > 0);
 
-    return id.join('');
+    return id.toString().split('').reversed.join('');
   }
 
   // Convert a string ID to a number using a custom alphabet
@@ -185,7 +211,7 @@ class Sqids {
           if (lowercaseId == word) {
             return true;
           }
-        } else if (RegExp(r'\d').hasMatch(word)) {
+        } else if (_numberRegex.hasMatch(word)) {
           if (lowercaseId.startsWith(word) || lowercaseId.endsWith(word)) {
             return true;
           }
@@ -225,13 +251,27 @@ class Sqids {
   }
 
   static Set<String> _filterBlocklist(Set<String> blocklist, String alphabet) {
-    final alphabetChars = Set.from(alphabet.toLowerCase().split(''));
+    final alphabetChars = alphabet.toLowerCase().split('').toSet();
 
     return blocklist
         .where((word) => word.length >= 3)
         .map((word) => word.toLowerCase())
-        .where((word) =>
-            Set.from(word.split('')).difference(alphabetChars).isEmpty)
+        .where(
+          (word) =>
+              word.split('').every((char) => !alphabetChars.contains(char)) ==
+              false,
+        ) // The logic in original was difference.isEmpty.
+        // Original: Set.from(word.split('')).difference(alphabetChars).isEmpty
+        // This means ALL characters in word MUST be in alphabetChars.
+        // My replacement above: word.split('').every((char) => !alphabetChars.contains(char)) == false
+        // This logic is confusing. Let's simpler:
+        // word chars subset of alphabet chars.
+        .where((word) {
+          for (var i = 0; i < word.length; i++) {
+            if (!alphabetChars.contains(word[i])) return false;
+          }
+          return true;
+        })
         .toSet();
   }
 }
