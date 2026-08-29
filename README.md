@@ -77,6 +77,15 @@ const id = sqids.encode([1, 2, 3]) // "se8ojk"
 const numbers = sqids.decode(id) // [1, 2, 3]
 ```
 
+## ⚡ Performance
+
+Encoding, decoding and blocklist matching avoid per-number string splits/joins
+and per-call blocklist scans; see `benchmark/benchmark.dart` and run it with:
+
+```sh
+dart run benchmark/benchmark.dart
+```
+
 ## 📝 License
 
 [MIT](LICENSE)

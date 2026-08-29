@@ -1,3 +1,5 @@
-library sqids;
+/// Official Dart port of Sqids. Generate short YouTube-looking IDs from
+/// numbers.
+library;
 
-export '../src/sqids.dart';
+export 'src/sqids.dart';

@@ -1,10 +1,10 @@
 name: sqids
 description: Official dart port of Sqids. Generate short YouTube-looking IDs from numbers.
-version: 0.0.2
+version: 0.0.3
 homepage: https://github.com/sqids/sqids-dart
 
 environment:
-    sdk: ">=3.10.0 <4.0.0"
+    sdk: ^3.13.0
 
 dependencies:
 

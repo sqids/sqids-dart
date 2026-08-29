@@ -1,222 +1,327 @@
-// ignore_for_file: prefer_initializing_formals
-
-import 'dart:math';
-
 import 'package:sqids/src/defaults.dart' as defaults;
 
+/// Official Dart port of Sqids. Generate short YouTube-looking IDs from
+/// numbers.
+///
+/// The implementation works on a single `List` view of the alphabet that is
+/// rotated, reversed and shuffled in place, and on code-unit lists for
+/// decoding, so encoding and decoding never re-split or re-join the alphabet
+/// per number.
 class Sqids {
-  // Properties
-  late String alphabet;
-  late int minLength;
-  late Set<String> blocklist;
-  static final _numberRegex = RegExp(r'\d');
+  /// The alphabet, shuffled once in the constructor, used to generate IDs.
+  final String alphabet;
 
-  // Constructor
+  /// The minimum length of generated IDs.
+  final int minLength;
+
+  /// The filtered blocklist: lowercase words of length >= 3 whose characters
+  /// all appear in [alphabet].
+  final Set<String> blocklist;
+
+  static const int _maxValue = 9_007_199_254_740_991; // 2^53 - 1
+  static const int _minAlphabetLength = 3;
+  static const int _minLengthLimit = 255;
+
   Sqids({
     String alphabet = defaults.alphabet,
     int minLength = 0,
     Set<String>? blocklist,
-  }) {
-    this.alphabet = _validateAlphabet(alphabet);
-    this.minLength = _validateMinLength(minLength);
-    this.blocklist = _filterBlocklist(blocklist ?? defaults.blocked, alphabet);
-    this.alphabet = shuffle(this.alphabet);
+  }) : alphabet = _shuffle(_validateAlphabet(alphabet)),
+       minLength = _validateMinLength(minLength),
+       blocklist = _filterBlocklist(blocklist ?? defaults.blocked, alphabet);
+
+  // Views of [alphabet] computed lazily on first use. [alphabet] never changes
+  // after construction, so these stay valid for the lifetime of the instance.
+  late final List<String> _alphabetChars = alphabet.split('');
+  late final List<int> _alphabetCodes = alphabet.codeUnits;
+  late final Set<int> _alphabetCodeSet = _alphabetCodes.toSet();
+
+  // Blocklist indexes, built once on first use, so [isBlockedId] never scans
+  // the raw set word by word or runs a regex at encode time.
+  //
+  // The reference matching rules reduce to:
+  //  - IDs of length <= 3: only an exact match against a 3-letter word counts
+  //    (shorter words are dropped by [_filterBlocklist]).
+  //  - Longer IDs: words of length <= 3 can never match; words containing a
+  //    digit must match a prefix or suffix, other words any substring, and
+  //    only words no longer than the ID need to be checked.
+  //
+  // Words are grouped by length into hash sets, and the ID is tested by
+  // substring membership: a word of length L occurs in the ID iff some
+  // substring of length L equals the word, which turns the per-word scans
+  // into O(ID length) lookups per word length.
+  late final Set<String> _exactBlocklist = {
+    for (final word in blocklist)
+      if (word.length == 3) word,
+  };
+  late final Map<int, Set<String>> _digitWordsByLength = _collectBlocklistWords(
+    containsDigit: true,
+  );
+  late final Map<int, Set<String>> _plainWordsByLength = _collectBlocklistWords(
+    containsDigit: false,
+  );
+  late final List<int> _blocklistLengths = {
+    ..._digitWordsByLength.keys,
+    ..._plainWordsByLength.keys,
+  }.toList()..sort();
+
+  Map<int, Set<String>> _collectBlocklistWords({required bool containsDigit}) {
+    final result = <int, Set<String>>{};
+    for (final word in blocklist) {
+      if (word.length < 4) continue;
+      if (_containsDigit(word) != containsDigit) continue;
+      (result[word.length] ??= <String>{}).add(word);
+    }
+    return result;
   }
 
-  // Encode a list of numbers into a string
+  /// Encode a list of numbers into a string.
   String encode(List<int> numbers) {
     if (numbers.isEmpty) {
       return '';
     }
 
-    // Validate that all numbers are in the valid range
-    final inRangeNumbers = numbers
-        .where((n) => n >= 0 && n <= maxValue())
-        .toList();
-    if (inRangeNumbers.length != numbers.length) {
-      throw Exception('Encoding supports numbers between 0 and ${maxValue()}');
+    for (final n in numbers) {
+      if (n < 0 || n > _maxValue) {
+        throw Exception('Encoding supports numbers between 0 and $_maxValue');
+      }
     }
 
-    return encodeNumbers(numbers);
+    return _encodeNumbers(numbers, 0);
   }
 
-  // Decode a string into a list of numbers
+  /// Decode a string into a list of numbers.
   List<int> decode(String id) {
-    List<int> ret = [];
-
     if (id.isEmpty) {
-      return ret;
+      return <int>[];
     }
 
-    // Validate that all characters in the ID are part of the alphabet
-    List<String> alphabetChars = this.alphabet.split('');
-    for (String c in id.split('')) {
-      if (!alphabetChars.contains(c)) {
+    final alphabetCodes = _alphabetCodes;
+    final alphabetLength = alphabetCodes.length;
+
+    // Reject IDs containing characters outside the alphabet before parsing.
+    final validCodes = _alphabetCodeSet;
+    for (var i = 0; i < id.length; i++) {
+      if (!validCodes.contains(id.codeUnitAt(i))) {
+        return <int>[];
+      }
+    }
+
+    // Working alphabet: rotate by the prefix character's index, then reverse.
+    final offset = alphabetCodes.indexOf(id.codeUnitAt(0));
+    final codes = List<int>.filled(alphabetLength, 0);
+    for (var i = 0; i < alphabetLength; i++) {
+      codes[i] = alphabetCodes[(i + offset) % alphabetLength];
+    }
+    for (int i = 0, j = alphabetLength - 1; i < j; i++, j--) {
+      final temp = codes[i];
+      codes[i] = codes[j];
+      codes[j] = temp;
+    }
+
+    final ret = <int>[];
+    final numberBase = alphabetLength - 1;
+    final idLength = id.length;
+    var position = 1;
+    while (position < idLength) {
+      final separator = codes[0];
+      final chunkStart = position;
+      var value = 0;
+      while (position < idLength && id.codeUnitAt(position) != separator) {
+        value = value * numberBase + codes.indexOf(id.codeUnitAt(position)) - 1;
+        position++;
+      }
+      if (position == chunkStart) {
         return ret;
       }
-    }
-
-    // Initialize variables for decoding
-    String prefix = id[0];
-    int offset = this.alphabet.indexOf(prefix);
-    String alphabet =
-        this.alphabet.substring(offset) + this.alphabet.substring(0, offset);
-    alphabet = alphabet.split('').reversed.join('');
-    String slicedId = id.substring(1);
-
-    // Decode the ID
-    while (slicedId.isNotEmpty) {
-      String separator = alphabet.substring(0, 1);
-
-      List<String> chunks = slicedId.split(separator);
-      if (chunks.isNotEmpty) {
-        if (chunks[0].isEmpty) {
-          return ret;
-        }
-
-        ret.add(toNumber(chunks[0], alphabet.substring(1)));
-        if (chunks.length > 1) {
-          alphabet = shuffle(alphabet);
-        }
+      ret.add(value);
+      if (position < idLength) {
+        _shuffleCodesInPlace(codes);
+        position++;
       }
-
-      slicedId = chunks.sublist(1).join(separator);
     }
-
     return ret;
   }
 
-  // Encode a list of numbers into a string with optional increment
+  /// Encode a list of numbers into a string with an optional increment used
+  /// when regenerating blocked IDs.
   String encodeNumbers(List<int> numbers, [int increment = 0]) {
-    if (increment > this.alphabet.length) {
+    return _encodeNumbers(numbers, increment);
+  }
+
+  String _encodeNumbers(List<int> numbers, int increment) {
+    final alphabetChars = _alphabetChars;
+    final alphabetLength = alphabetChars.length;
+    if (increment > alphabetLength) {
       throw Exception('Reached max attempts to re-generate the ID');
     }
 
-    int offset = 0;
-    int len = numbers.length;
+    var offset = 0;
+    final numberCount = numbers.length;
+    for (var i = 0; i < numberCount; i++) {
+      offset += alphabet.codeUnitAt(numbers[i] % alphabetLength) + i;
+    }
+    offset = (offset + numberCount + increment) % alphabetLength;
 
-    // Calculate the offset based on the numbers
-    for (int i = 0; i < len; i++) {
-      int v = numbers[i];
-      offset += this.alphabet.codeUnitAt(v % this.alphabet.length) + i;
+    // Working alphabet: rotate by [offset], then reverse. The first character
+    // of the rotated alphabet (the last entry of the reversed list) becomes
+    // the ID prefix; the first entry of the reversed list is the separator
+    // between numbers.
+    final chars = List<String>.filled(alphabetLength, '', growable: false);
+    for (var i = 0; i < alphabetLength; i++) {
+      chars[i] = alphabetChars[(i + offset) % alphabetLength];
+    }
+    for (int i = 0, j = alphabetLength - 1; i < j; i++, j--) {
+      final temp = chars[i];
+      chars[i] = chars[j];
+      chars[j] = temp;
     }
 
-    offset = (offset + len) % this.alphabet.length;
-
-    offset = (offset + increment) % this.alphabet.length;
-
-    // Create internal alphabet as a list to avoid repeated string splits
-    // Using string manipulation for the initial rotation as it's just one time
-    String alphabetStr =
-        this.alphabet.substring(offset) + this.alphabet.substring(0, offset);
-    String prefix = alphabetStr[0];
-    List<String> alphabet = alphabetStr.split('').reversed.toList();
-
-    StringBuffer result = StringBuffer();
-    result.write(prefix);
-
-    // Generate the encoded ID
-    for (int i = 0; i < len; i++) {
-      int num = numbers[i];
-
-      // Using a helper that works with List<String> would be faster but toId expects String
-      // For now, let's keep toId adaptable or pass the current state
-      // Actually passing the list sublist as string is expensive: alphabet.substring(1)
-      // Let's optimize shuffle to work on the list in place if possible,
-      // but shuffle returns a new 'alphabet' state.
-
-      // We need to match the spec exactly on how alphabet evolves.
-      // alphabet = shuffle(alphabet) returns a string in original code.
-      // Let's rewrite optimal shuffle and toId.
-
-      result.write(toId(num, alphabet.sublist(1).join('')));
-
-      if (i < len - 1) {
-        result.write(alphabet.sublist(0, 1).join(''));
-        _shuffleInPlace(alphabet);
+    final result = StringBuffer()..write(chars[alphabetLength - 1]);
+    final numberBase = alphabetLength - 1;
+    final digits = <String>[];
+    for (var i = 0; i < numberCount; i++) {
+      digits.clear();
+      var value = numbers[i];
+      do {
+        digits.add(chars[1 + (value % numberBase)]);
+        value ~/= numberBase;
+      } while (value > 0);
+      for (var d = digits.length - 1; d >= 0; d--) {
+        result.write(digits[d]);
+      }
+      if (i < numberCount - 1) {
+        result.write(chars[0]);
+        _shuffleCharsInPlace(chars);
       }
     }
 
-    String id = result.toString();
+    var id = result.toString();
 
-    // Ensure the ID meets the minimum length
+    // Ensure the ID meets the minimum length. Each padding round starts with
+    // the current separator character, so decoding stops right after the
+    // original numbers (the next chunk is always empty).
     if (minLength > id.length) {
-      id += alphabet[0];
-
-      while (minLength - id.length > 0) {
-        _shuffleInPlace(alphabet);
-        int diff = minLength - id.length;
-        if (diff > 0) {
-          id += alphabet.sublist(0, min(diff, alphabet.length)).join('');
+      final padded = StringBuffer(id)..write(chars[0]);
+      while (minLength - padded.length > 0) {
+        _shuffleCharsInPlace(chars);
+        final remaining = minLength - padded.length;
+        final take = remaining < alphabetLength ? remaining : alphabetLength;
+        for (var i = 0; i < take; i++) {
+          padded.write(chars[i]);
         }
       }
+      id = padded.toString();
     }
 
-    // If the generated ID is blocked, recursively regenerate with an increment
+    // If the generated ID is blocked, regenerate with an incremented offset.
     if (isBlockedId(id)) {
-      id = encodeNumbers(numbers, increment + 1);
+      id = _encodeNumbers(numbers, increment + 1);
     }
 
     return id;
   }
 
-  // Shuffle the characters of the alphabet
+  /// Shuffle the characters of an alphabet.
   String shuffle(String alphabet) {
-    if (alphabet.isEmpty) return alphabet;
-    final chars = alphabet.split('');
-    _shuffleInPlace(chars);
-    return chars.join('');
+    return _shuffle(alphabet);
   }
 
-  void _shuffleInPlace(List<String> chars) {
-    for (int i = 0, j = chars.length - 1; j > 0; i++, j--) {
+  static String _shuffle(String alphabet) {
+    if (alphabet.isEmpty) {
+      return alphabet;
+    }
+    final chars = alphabet.split('');
+    _shuffleCharsInPlace(chars);
+    return chars.join();
+  }
+
+  static void _shuffleCharsInPlace(List<String> chars) {
+    final length = chars.length;
+    for (int i = 0, j = length - 1; j > 0; i++, j--) {
       final r =
-          (i * j + chars[i].codeUnitAt(0) + chars[j].codeUnitAt(0)) %
-          chars.length;
+          (i * j + chars[i].codeUnitAt(0) + chars[j].codeUnitAt(0)) % length;
       final temp = chars[i];
       chars[i] = chars[r];
       chars[r] = temp;
     }
   }
 
-  // Convert a number to a string ID using a custom alphabet
+  // Decode keeps its alphabet as code units, so it needs the same shuffle
+  // over ints. The formula is identical, so both produce the same permutation.
+  static void _shuffleCodesInPlace(List<int> codes) {
+    final length = codes.length;
+    for (int i = 0, j = length - 1; j > 0; i++, j--) {
+      final r = (i * j + codes[i] + codes[j]) % length;
+      final temp = codes[i];
+      codes[i] = codes[r];
+      codes[r] = temp;
+    }
+  }
+
+  /// Convert a number to a string ID using a custom alphabet.
   String toId(int num, String alphabet) {
-    final id = StringBuffer();
     final chars = alphabet.split('');
-    final int charsLength = chars.length;
-
-    int result = num;
-
+    final charsLength = chars.length;
+    final id = StringBuffer();
+    var result = num;
     do {
       id.write(chars[result % charsLength]);
-      result = (result / charsLength).floor();
+      result ~/= charsLength;
     } while (result > 0);
-
-    return id.toString().split('').reversed.join('');
+    final encoded = id.toString();
+    final reversed = StringBuffer();
+    for (var i = encoded.length - 1; i >= 0; i--) {
+      reversed.write(encoded[i]);
+    }
+    return reversed.toString();
   }
 
-  // Convert a string ID to a number using a custom alphabet
+  /// Convert a string ID to a number using a custom alphabet.
   int toNumber(String id, String alphabet) {
     final chars = alphabet.split('');
-    return id.split('').fold(0, (a, v) => a * chars.length + chars.indexOf(v));
+    final charsLength = chars.length;
+    var result = 0;
+    for (var i = 0; i < id.length; i++) {
+      result = result * charsLength + chars.indexOf(id[i]);
+    }
+    return result;
   }
 
-  // Check if an ID is blocked based on the blocklist
+  /// Check if an ID is blocked based on the blocklist.
   bool isBlockedId(String id) {
     final lowercaseId = id.toLowerCase();
+    final idLength = lowercaseId.length;
 
-    for (final word in blocklist) {
-      if (word.length <= lowercaseId.length) {
-        if (lowercaseId.length <= 3 || word.length <= 3) {
-          if (lowercaseId == word) {
+    if (idLength <= 3) {
+      return idLength == 3 && _exactBlocklist.contains(lowercaseId);
+    }
+
+    final lengths = _blocklistLengths;
+    for (var i = 0; i < lengths.length; i++) {
+      final wordLength = lengths[i];
+      if (wordLength > idLength) {
+        break;
+      }
+
+      final digitWords = _digitWordsByLength[wordLength];
+      if (digitWords != null &&
+          (digitWords.contains(lowercaseId.substring(0, wordLength)) ||
+              digitWords.contains(
+                lowercaseId.substring(idLength - wordLength),
+              ))) {
+        return true;
+      }
+
+      final plainWords = _plainWordsByLength[wordLength];
+      if (plainWords != null) {
+        final lastStart = idLength - wordLength;
+        for (var start = 0; start <= lastStart; start++) {
+          if (plainWords.contains(
+            lowercaseId.substring(start, start + wordLength),
+          )) {
             return true;
           }
-        } else if (_numberRegex.hasMatch(word)) {
-          if (lowercaseId.startsWith(word) || lowercaseId.endsWith(word)) {
-            return true;
-          }
-        } else if (lowercaseId.contains(word)) {
-          return true;
         }
       }
     }
@@ -224,54 +329,60 @@ class Sqids {
     return false;
   }
 
-  // Get the maximum value supported for encoding
+  /// Get the maximum value supported for encoding.
   int maxValue() {
-    return (pow(2, 53) - 1).toInt();
+    return _maxValue;
   }
 
   static String _validateAlphabet(String alphabet) {
-    const minAlphabetLength = 3;
-
-    if (alphabet.length < minAlphabetLength) {
-      throw Exception('Alphabet length must be at least $minAlphabetLength');
+    if (alphabet.length < _minAlphabetLength) {
+      throw Exception('Alphabet length must be at least $_minAlphabetLength');
     }
 
-    if (Set.of(alphabet.split('')).length != alphabet.length) {
+    if (alphabet.codeUnits.toSet().length != alphabet.length) {
       throw Exception('Alphabet must contain unique characters');
     }
     return alphabet;
   }
 
   static int _validateMinLength(int minLength) {
-    const minLengthLimit = 255;
-    if (minLength < 0 || minLength > minLengthLimit) {
-      throw Exception('Minimum length has to be between 0 and $minLengthLimit');
+    if (minLength < 0 || minLength > _minLengthLimit) {
+      throw Exception(
+        'Minimum length has to be between 0 and $_minLengthLimit',
+      );
     }
     return minLength;
   }
 
   static Set<String> _filterBlocklist(Set<String> blocklist, String alphabet) {
-    final alphabetChars = alphabet.toLowerCase().split('').toSet();
+    final alphabetCodes = Set<int>.of(alphabet.toLowerCase().codeUnits);
+    final filtered = <String>{};
+    for (final word in blocklist) {
+      if (word.length < 3) {
+        continue;
+      }
+      final lowercase = word.toLowerCase();
+      var allowed = true;
+      for (var i = 0; i < lowercase.length; i++) {
+        if (!alphabetCodes.contains(lowercase.codeUnitAt(i))) {
+          allowed = false;
+          break;
+        }
+      }
+      if (allowed) {
+        filtered.add(lowercase);
+      }
+    }
+    return filtered;
+  }
 
-    return blocklist
-        .where((word) => word.length >= 3)
-        .map((word) => word.toLowerCase())
-        .where(
-          (word) =>
-              word.split('').every((char) => !alphabetChars.contains(char)) ==
-              false,
-        ) // The logic in original was difference.isEmpty.
-        // Original: Set.from(word.split('')).difference(alphabetChars).isEmpty
-        // This means ALL characters in word MUST be in alphabetChars.
-        // My replacement above: word.split('').every((char) => !alphabetChars.contains(char)) == false
-        // This logic is confusing. Let's simpler:
-        // word chars subset of alphabet chars.
-        .where((word) {
-          for (var i = 0; i < word.length; i++) {
-            if (!alphabetChars.contains(word[i])) return false;
-          }
-          return true;
-        })
-        .toSet();
+  static bool _containsDigit(String word) {
+    for (var i = 0; i < word.length; i++) {
+      final code = word.codeUnitAt(i);
+      if (code >= 0x30 && code <= 0x39) {
+        return true;
+      }
+    }
+    return false;
   }
 }

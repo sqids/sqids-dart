@@ -35,17 +35,11 @@ void main() {
     });
 
     test('too short of an alphabet', () {
-      expect(
-        () => Sqids(alphabet: 'ab'),
-        throwsA(isA<Exception>()),
-      );
+      expect(() => Sqids(alphabet: 'ab'), throwsA(isA<Exception>()));
     });
 
     test('too short of an alphabet', () {
-      expect(
-        () => Sqids(alphabet: 'ab'),
-        throwsA(isA<Exception>()),
-      );
+      expect(() => Sqids(alphabet: 'ab'), throwsA(isA<Exception>()));
     });
   });
 }
